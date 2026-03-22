@@ -3,12 +3,14 @@ class Hook {
   _call = null; // 编译后的函数缓存
   taps = []; // 存储注册的回调
   interceptors = []; // 存储拦截器
+
   constructor(...args) {
     this._args = args;
   }
 
   intercept(interceptor) {
     this.interceptors.push(interceptor);
+    this.call = undefined;
   }
 
   tap(name, fn) {
