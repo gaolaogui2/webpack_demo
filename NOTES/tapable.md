@@ -76,27 +76,179 @@ class Tapable {
 Hook 作为基类实现了标准的发布订阅能力，只负责注册和缓存逻辑；
 `_compile` 作为抽象方法，由子类单独实现，通过懒编译 + 缓存机制，避免重复编译：
 
-- 由于编译依赖 tap 内容，所以每次新增订阅后，缓存 `_call` 都要删掉；
+- 由于编译依赖 `tap` 和 `intercept` 内容，所以每次新增订阅后，缓存 `_call` 都要删掉；
 
-`intercept` 是基类提供的拦截器能力，任意 Plugin 都可以对订阅的 Hook 实例添加拦截逻辑，用以在不改变原有订阅基础上，修改其订阅的内部实现逻辑；
-拦截器可以监听所有订阅的 `register` `tap` `call` 这 3 个阶段，插入 1 些自定义逻辑；
+`intercept` 是基类提供的拦截器能力，任意 Plugin 都可以对订阅的 Hook 实例添加拦截逻辑，用以在不改变原有订阅基础上，新增 1 些如 日志、调试 等横切面能力；
+拦截器可以监听所有订阅的 `register` `call` `tap` 这 3 个阶段，插入 1 些自定义逻辑；
+
+- `register` 在每个 `tap` 挂载时执行 1 次；
+- `call` 在 `hook.call` 触发时执行 1 次；
+- `tap` 则在每个 `tap` 回调执行前都执行 1 次；
+
 多个相同阶段的拦截器会按照 Plugin 的引用顺序执行，不支持自定义权重；
+
+tap 与 intercept 的定位与区别：
+
+- `tap` 用于注册业务逻辑回调，执行确定且可编译展开，是插件系统的核心承载点；
+- `intercept` 用于注入横切关注点，方法可选，所以需要运行时判断，适合日志、监控、参数注入等辅助逻辑；
+- 两者在 `_compile` 中处理方式不同：
+  - tap 回调被平铺展开以消除循环开销，
+  - `intercept` 逻辑保留循环因其数量少且方法存在性不确定。
 
 ## 不同的子类通过重写 `_compile` 实现不同的执行逻辑
 
 ```js
 class SyncHook {
-  _compile() {
-    // 1. 拿到当前所有的订阅（taps）
-    const taps = this.taps; // [{ fn, name }, { fn, name }]
+  constructor(args = []) {
+    // 存储所有注册的 tap 回调
+    this._x = undefined; // 实际存储函数的数组
+    this.taps = []; // 存储 tap 信息（name, type, fn）
+    this.interceptors = []; // 存储拦截器
+    this._args = args; // 参数名称列表，如 ['name', 'age']
+  }
 
-    // 2. 把它们编译成一个函数
-    return function compiled(...args) {
-      // 这个函数体里"硬编码"了所有订阅的回调
-      taps[0].fn(...args);
-      taps[1].fn(...args);
-      // ...
+  // 注册 tap 回调
+  tap(options, fn) {
+    this._tap("sync", options, fn);
+  }
+
+  _tap(type, options, fn) {
+    // 标准化 options
+    if (typeof options === "string") {
+      options = { name: options };
+    }
+
+    const tapInfo = {
+      type,
+      fn,
+      name: options.name,
+      ...options,
     };
+
+    // 调用 intercept 的 register 钩子
+    for (const interceptor of this.interceptors) {
+      if (interceptor.register) {
+        const newTapInfo = interceptor.register(tapInfo);
+        if (newTapInfo) {
+          tapInfo.fn = newTapInfo.fn;
+          tapInfo.name = newTapInfo.name;
+        }
+      }
+    }
+
+    // 添加到 taps 数组
+    this.taps.push(tapInfo);
+
+    // 重新编译 hook
+    this._compile();
+  }
+
+  // 添加拦截器
+  intercept(interceptor) {
+    this.interceptors.push(interceptor);
+
+    // 如果已有 taps，对新添加的 taps 调用 register
+    if (interceptor.register) {
+      for (let i = 0; i < this.taps.length; i++) {
+        const newTapInfo = interceptor.register(this.taps[i]);
+        if (newTapInfo) {
+          this.taps[i] = newTapInfo;
+        }
+      }
+    }
+
+    // 重新编译
+    this._compile();
+  }
+
+  // 调用 hook
+  call(...args) {
+    // 执行编译后的函数
+    return this._call(args);
+  }
+
+  // 编译方法：生成调用函数
+  _compile() {
+    // 提取所有 tap 函数到 _x 数组
+    this._x = this.taps.map((tap) => tap.fn);
+
+    // 生成函数代码
+    const code = this._createCallCode();
+
+    // 使用 new Function 创建函数
+    // 参数: this, _x, 实际的调用参数
+    this._call = new Function(
+      "var _context;\n" +
+        "var _x = this._x;\n" +
+        "var _taps = this.taps;\n" +
+        "var _interceptors = this.interceptors;\n" +
+        code,
+    ).bind(this);
+  }
+
+  // 核心：生成调用代码（这是关键）
+  _createCallCode() {
+    const taps = this.taps;
+    const interceptors = this.interceptors;
+    const args = this._args;
+
+    // 构建参数列表
+    const argsStr = args.length ? args.join(", ") : "";
+
+    let code = "";
+
+    // 1. 生成 intercept 的 call 钩子（循环，因为方法可选）
+    if (interceptors.length > 0) {
+      code += `
+        var _interceptors = this.interceptors;
+        if (_interceptors.length > 0) {
+          for (var i = 0; i < _interceptors.length; i++) {
+            var interceptor = _interceptors[i];
+            if (interceptor.call) {
+              interceptor.call(${argsStr});
+            }
+          }
+        }
+      `;
+    }
+
+    // 2. 生成 tap 回调的执行代码（平铺展开）
+    for (let i = 0; i < taps.length; i++) {
+      const tap = taps[i];
+
+      // 每个 tap 执行前，调用 intercept 的 tap 钩子（循环）
+      if (interceptors.length > 0) {
+        code += `
+          {
+            var _tap = this.taps[${i}];
+            for (var j = 0; j < _interceptors.length; j++) {
+              var interceptor = _interceptors[j];
+              if (interceptor.tap) {
+                interceptor.tap(_tap);
+              }
+            }
+          }
+        `;
+      }
+
+      // 执行 tap 回调（直接调用，没有循环）
+      code += `
+        var _fn${i} = _x[${i}];
+        var _result${i} = _fn${i}(${argsStr});
+      `;
+
+      // SyncBailHook 会有返回判断，但 SyncHook 不需要
+      // if (_result${i} !== undefined) return _result${i};
+    }
+
+    // 3. 返回结果（SyncHook 返回最后一个结果）
+    if (taps.length > 0) {
+      code += `return _result${taps.length - 1};`;
+    } else {
+      code += `return undefined;`;
+    }
+
+    return code;
   }
 }
 ```
@@ -137,7 +289,7 @@ Compilation 中：
 例如 html-webpack-plugin ，本身也是对其他插件的"服务提供者" ，
 它需要在HTML生成的不同阶段暴露控制点，让其他插件可以修改标签、内容、属性等，例如：
 
-- csp-html-webpack-plugin 添加 CSP 相关 meta 标签；
-- html-webpack-inject-preload 添加 preload 链接；
+- `csp-html-webpack-plugin` 添加 CSP 相关 meta 标签；
+- `html-webpack-inject-preload` 添加 preload 链接；
 
-所以它提供了若干 AsyncSeriesWaterfallHook 类型的 hook ；
+所以它提供了若干 `AsyncSeriesWaterfallHook` 类型的 hook ；
