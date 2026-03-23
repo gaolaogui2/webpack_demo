@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/webpack/schemas/WebpackOptions.json",
+  "entry": "./src/index.js",
+  "output": {
+    "filename": "bundle.js"
+  },
+  "mode": "development",
+  "plugins": [],
+  "devtool": "eval"
+}

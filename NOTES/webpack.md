@@ -215,33 +215,33 @@ class Compiler extends Tapable {
   emitAssets() {}
 
   close(callback) {
-    // 1. 触发close钩子，让插件清理资源
+    // 触发close钩子，让插件清理资源
     this.hooks.close.callAsync((err) => {
-      // 2. 清理文件监听
+      // 清理文件监听
       if (this.watching) {
         this.watching.close();
       }
 
-      // 3. 释放内存
+      // 释放内存
       this.cache = null;
       this.compilations = [];
 
-      // 4. 完成清理
+      // 完成清理
       callback(err);
     });
   }
 
   watch(watchOptions, handler) {
-    // 1. 创建 Watching 实例
+    // 创建 Watching 实例
     const watching = new Watching(this, watchOptions, handler);
 
-    // 2. 启动文件监听
+    // 启动文件监听
     this.watchFileSystem.watch(watchOptions, (err, changes) => {
-      // 3. 文件变化时调用 watching 的 _go 方法
+      // 文件变化时调用 watching 的 _go 方法
       watching._go(changes); // ✅ 应该是 watching._go，不是 this._go
     });
 
-    // 4. 返回 Watching 对象
+    // 返回 Watching 对象
     return watching;
   }
 }
@@ -308,18 +308,13 @@ const webpack = (options, callback) => {
 class NodeEnvironmentPlugin {
   apply(compiler) {
     // 输入文件系统（读取文件的基础）
-    compiler.inputFileSystem = new CachedInputFileSystem(
-      new NodeJsInputFileSystem(),
-      60000,
-    );
+    compiler.inputFileSystem = new CachedInputFileSystem(new NodeJsInputFileSystem(), 60000);
 
     // 输出文件系统（写入文件的基础）
     compiler.outputFileSystem = new NodeOutputFileSystem();
 
     // 监听文件系统（watch 模式的基础）
-    compiler.watchFileSystem = new NodeWatchFileSystem(
-      compiler.inputFileSystem,
-    );
+    compiler.watchFileSystem = new NodeWatchFileSystem(compiler.inputFileSystem);
 
     // 缓存系统
     compiler.cache = new MemoryCachePlugin();
@@ -410,3 +405,63 @@ class Watching {
 
 export { webpack };
 ```
+
+## 0. webpack 函数本质上是 1 个工厂函数，负责实例化 Compiler，是整个 Webpack 构建流程的启动入口。
+
+webpack 函数本质上是 1 个工厂函数，负责实例化 Compiler，是整个 Webpack 构建流程的启动入口。
+
+> 这里说它是工厂函数，是因为它不直接作为类被实例化（不通过 new webpack() 调用），
+> 而是通过普通函数调用 webpack(config) 来创建并返回 1 个全新的实例。
+
+在 Node.js 环境中调用它时：
+
+1. webpack 函数接收 1 个配置对象（或配置数组）作为参数，返回 1 个 Compiler 实例。这个实例代表了整个编译过程的完整生命周期，拥有 run、watch 等方法，以及贯穿整个构建过程的钩子系统。
+
+2. 它内部会解析用户传入的配置，合并默认配置、CLI 参数以及不同模式下的预设配置，最终生成标准化的配置对象传递给 Compiler。
+
+3. 当传入配置数组或 1 个返回包含多个配置的函数时，它会创建 MultiCompiler 实例，用于并行或串行管理多个独立的编译流程。
+
+## 1. 验证配置
+
+validateSchema(schema, options)
+
+## 2. 应用默认配置
+
+options = { ...defaultOptions, ...options }
+
+## 3. 创建Compiler
+
+const compiler = createCompiler(options)
+
+## 4. 标准化配置，处理预设
+
+const options = getNormalizedWebpackOptions(rawOptions)
+applyWebpackOptionsBaseDefaults(options)
+
+## 5. 实例化Compiler - 这是**第一个**Compiler对象
+
+const compiler = new Compiler(options.context)
+compiler.options = options
+
+## 6. 现在Compiler有了钩子，开始挂载配置中的插件
+
+if (Array.isArray(options.plugins)) {
+for (const plugin of options.plugins) {
+if (typeof plugin === "function") {
+plugin.call(compiler, compiler) // 这里才真正调用插件的apply方法！
+} else {
+plugin.apply(compiler)
+}
+}
+}
+
+## 7. 注入核心内置插件（如EntryPlugin、NodeEnvironmentPlugin等）
+
+new NodeEnvironmentPlugin().apply(compiler)
+
+## 8. Compiler 环境准备相关 hooks 执行
+
+compiler.hooks.environment.call()
+compiler.hooks.afterEnvironment.call()
+
+## 9. 应用所有内置插件（基于配置）
