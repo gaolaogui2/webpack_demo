@@ -421,24 +421,90 @@ webpack 函数本质上是 1 个工厂函数，负责实例化 Compiler，是整
 
 3. 当传入配置数组或 1 个返回包含多个配置的函数时，它会创建 MultiCompiler 实例，用于并行或串行管理多个独立的编译流程。
 
-## 1. 验证配置
+## 1. 应用默认配置
 
-validateSchema(schema, options)
+webpack 会根据「CLI 命令行参数 > 用户配置文件」的优先级通过 webpack-merge 来实现配置合并。
 
-## 2. 应用默认配置
+同时也可以手动使用 webpack-merge 来合并多个配置文件来实现多环境下相同配置的抽离；
 
-options = { ...defaultOptions, ...options }
+- webpack5 新增的 `extends` 字段内部实现也是 webpack-merge 能力；
+
+```js
+const webpack = () => {
+  options = { ...defaultOptions, ...options };
+};
+```
+
+## 2. 验证配置
+
+```js
+import schema form './schema';
+
+const webpack = (options) => {
+  validateSchema(schema, options);
+};
+```
+
+`validateSchema` 是 1 个内部由 JSON schema 验证库实现的配置校验函数；
+所有版本的 webpack 都有维护 1 个 JSON Schema 定义文件放在全局，类似 1 种声明式的 DSL ，描述了所有合法配置项的类型、结构、枚举值、默认行为等。
+
+`webpack()` 首次执行时，会将这份 JSON Schema 转为 AST 并根据这份 AST 动态生成 1 个校验逻辑集合，并缓存起来，后续直接复用；
+
+- 这里传入配置数组时会多次执行校验环境，但针对 JSON Schema 的编译动作只执行 1 次；
+
+> 这里的 JSON Schema 作为配置规则的唯 1 源头，不止用于在 `validateSchema` 中；
+>
+> - 在 IDE 中编写 webpack.config.json 时可以通过 `$schema` 字段引用这份 JSON Schema 来生成配置编写提示；
+>   - 这里的 `$schema` 和 `@types/webpack` 的类型提示本质是同 1 个能力，区别在于 `$schema` 针对 .json 文件，`@types/webpack` 则针对 .ts 文件；
+> - webpack 官方配置文档也是根据这份 JSON Schema 映射生成而不是手动维护的；
+> - 第三方库可以利用这份 Schema 在合并时提供类型安全的校验;
+
+webpack 编译 1 次 Schema 通常会耗时 5-20ms ，相较后续若干密集I/O操作在时间消耗上几乎可以忽略不计，
+所以 webpack 在发版前没有将这份编译结果保留在 webpack 源码中。
 
 ## 3. 创建Compiler
 
-const compiler = createCompiler(options)
+> 「配置信息的整理和校验」并不是 webpack 的责任，责任属于它的上层调用者，比如 webpack-cli 、webpack-dev-server ，
+> 若在第 3 方项目中直接引用了 webpack 能力，那配置相关的责任则需要第 3 方自行承担。
+
+配置信息整理完成以后，开始进入 webpack 核心逻辑，执行 `createCompiler` 创建 1 个 Compiler 实例。
+注意，这里如果涉及多构建任务时，会转而执行 `createMultiCompiler` 。
+
+- 物料库 和 公共工具包 通常会涉及同时提供多个 bundle 格式的情况：
+  - CommonJS 供 Node 环境使用；
+  - ES Module 供支持 tree shaking 的打包工具使用；
+  - UMD 供浏览器直接引用；
+- 在 monorepo 根目录下调用 1 次 Webpack 同时构建多个子包是非常常见的需求；
+
+`MultiCompiler` 的并行实现是依赖 NodeJS 的轮询机制，本质是并发，
+由于编译任务多为 I/O 密集型任务，所以可以在宏观上表现出“同时进行”的效果。
+
+```js
+const webpack = (options) => {
+  const isMultiCompiler = Array.isArray(options);
+  if (isMultiCompiler) {
+    const compilers = createMultiCompiler(options);
+  } else {
+    const compiler = createCompiler(options);
+  }
+};
+```
 
 ## 4. 标准化配置，处理预设
 
-const options = getNormalizedWebpackOptions(rawOptions)
-applyWebpackOptionsBaseDefaults(options)
+```js
+const createCompiler = () => {
+  const options = getNormalizedWebpackOptions(rawOptions);
+  applyWebpackOptionsBaseDefaults(options);
+};
+```
 
-## 5. 实例化Compiler - 这是**第一个**Compiler对象
+将用户传入的配置（可能含有简写形式、未规范的字段）转换为标准化的内部格式；
+填充那些不依赖于模式（mode）的默认值，也就是无论开发模式还是生产模式都通用的默认配置。
+
+这些默认值是在配置校验通过后、编译器实例化之前填充的，确保编译器运行时拥有完整的配置。
+
+## 5. 实例化Compiler
 
 const compiler = new Compiler(options.context)
 compiler.options = options
