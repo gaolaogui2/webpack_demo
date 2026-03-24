@@ -506,28 +506,51 @@ const createCompiler = () => {
 
 ## 5. 实例化Compiler
 
-const compiler = new Compiler(options.context)
-compiler.options = options
+```js
+const createCompiler = () => {
+  const compiler = new Compiler(options.context);
+  compiler.options = options;
+};
+```
 
-## 6. 现在Compiler有了钩子，开始挂载配置中的插件
+## 6. 注入核心内置插件（如EntryPlugin、NodeEnvironmentPlugin等）
 
-if (Array.isArray(options.plugins)) {
-for (const plugin of options.plugins) {
-if (typeof plugin === "function") {
-plugin.call(compiler, compiler) // 这里才真正调用插件的apply方法！
-} else {
-plugin.apply(compiler)
-}
-}
-}
+```js
+const createCompiler = () => {
+  new NodeEnvironmentPlugin().apply(compiler);
+};
+```
 
-## 7. 注入核心内置插件（如EntryPlugin、NodeEnvironmentPlugin等）
+## 7. 现在Compiler有了钩子，开始挂载配置中的插件
 
-new NodeEnvironmentPlugin().apply(compiler)
+```js
+const createCompiler = () => {
+  if (Array.isArray(options.plugins)) {
+    for (const plugin of options.plugins) {
+      // 这里才真正调用插件的apply方法！
+      if (typeof plugin === "function") {
+        plugin.call(compiler, compiler);
+      } else {
+        plugin.apply(compiler);
+      }
+    }
+  }
+};
+```
 
 ## 8. Compiler 环境准备相关 hooks 执行
 
-compiler.hooks.environment.call()
-compiler.hooks.afterEnvironment.call()
+```js
+const createCompiler = () => {
+  compiler.hooks.environment.call();
+  compiler.hooks.afterEnvironment.call();
+};
+```
 
 ## 9. 应用所有内置插件（基于配置）
+
+```js
+const createCompiler = () => {
+  new WebpackOptionsApply().process(options, compiler);
+};
+```
