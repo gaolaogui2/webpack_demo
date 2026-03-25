@@ -661,6 +661,8 @@ const createCompiler = () => {
 };
 ```
 
+### 8.1 触发环境钩子（基础环境已就绪）
+
 用户的自定义 plugins 挂载完成以后，开始执行 WebpackOptionsApply 来挂载系统内置的 plugins ，
 
 - 首先这里需要依赖系统的读写能力，所以要在 NodeEnvironmentPlugin 后面，
@@ -674,3 +676,37 @@ const createCompiler = () => {
   - webpack 中所有配置项都对应了相关的 class 来负责实现，
     - `entry` 对应 EntryPlugin，
     - `output` 对应 JsonpTemplatePlugin，NodeTemplatePlugin 等等；
+
+### 8.2 根据 target 加载核心插件
+
+接下来会根据 `options.type` 来确定如何来加载 chunk ，
+这里默认值是 `web` ，会选择使用 JsonpTemplatePlugin 来实现；
+
+- 在生成的 HTML 中，通过 `<script>` 标签异步加载额外的 chunk 文件；
+- 支持跨域加载、按需加载；
+- 处理 chunk 的缓存、重试、并发加载等逻辑；
+
+Webpack 在 Web 环境选择 JSONP 作为 chunk 加载方式，主要是基于浏览器环境的技术限制和性能考量的综合选择。
+
+- 浏览器中常规的 XMLHttpRequest 或 fetch 受同源策略限制。但 `<script>` 标签不受此限制；
+  - 浏览器对 `<script>` 标签的加载有成熟的优化机制：
+  - 多个 `<script>` 标签会并行下载（受浏览器同域名并发数限制，通常 6-8 个）；
+  - 加载后的脚本会被浏览器独立缓存，下次访问相同 chunk 时直接使用缓存；
+  - 通过 async 或 defer 属性可以控制执行时机，避免阻塞页面渲染；
+- 与浏览器原生缓存机制深度集成，天然支持代码执行隔离与错误边界；
+
+现代浏览器的 ESM 在技术特性上全面优于 JSONP 方案，Webpack 选择 JSONP 为默认加载方式，核心原因是历史包袱，而非技术优劣。
+
+### 8.3 处理 entry 配置
+
+### 8.4 处理 resolve 配置（简化：直接赋值）
+
+### 8.5 处理 module.rules（简化：模拟规则注册）
+
+### 8.6 根据 devtool 添加 source map 插件
+
+### 8.7 根据 optimization 配置添加优化插件
+
+### 8.8 处理 externals
+
+### 8.9 触发装配完成钩子
