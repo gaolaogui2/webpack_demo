@@ -513,6 +513,23 @@ const createCompiler = () => {
 };
 ```
 
+首先会初始化 1 些基础属性：
+
+- 设置 `this.context` 为传入的上下文路径（通常是 `process.cwd()`），作为项目根目录；
+  - 是 Compiler 实例的绝对路径根目录，它在整个构建过程中扮演“路径锚点”的角色，后续若干相对路径最终都会会和它对齐；
+  - Monorepo 项目下的 MultiCompiler 实例因为需要对应多个不同路径的子应用，需要配置多个 `this.context` 值；
+
+- 设置 `this.name` 等标识属性；
+  - 在 MultiCompiler 实例下才需要 `this.name` 字段来在「缓存、日志」等等位置区分应用实例；
+
+- 初始化 `this.options` 为传入的配置（此时配置已经过校验、标准化、默认值填充，是完整配置）；
+
+Compiler 继承自 Tapable，在构造函数中会初始化一系列贯穿构建生命周期的钩子；
+
+初始化 `this.cache` 缓存、`this.resolverFactory` 解析器工厂等内部数据结构；
+
+- `cache` 是配置中用于控制构建缓存行为的字段。Webpack5 引入了持久化缓存，可以将构建结果缓存到硬盘，大幅提升 2 次构建速度。
+
 ## 6. 注入核心内置插件（如EntryPlugin、NodeEnvironmentPlugin等）
 
 ```js
@@ -520,6 +537,20 @@ const createCompiler = () => {
   new NodeEnvironmentPlugin().apply(compiler);
 };
 ```
+
+NodeEnvironmentPlugin 是 Webpack 内置的基础环境插件，负责为 Compiler 注入 Node.js 环境下的文件系统和基础日志能力。
+
+- compiler.inputFileSystem 和 compiler.outputFileSystem 为 Compiler 提供文件读写能力，
+  - 后续为了支持用户覆盖这里的逻辑实现自定义，这里没有将其直接塞入 Compiler 内部而是独立作为 plugin 维护；
+  - 单一职责：Compiler 负责构建流程编排，文件系统注入作为独立插件，符合插件化架构设计；
+- compiler.infrastructureLogger 为 Webpack 内部提供日志输出能力；
+- compiler.watchFileSystem 依赖 compiler.inputFileSystem 实现对文件改动的监听；
+  - 默认基于 fs.watch ，环境不支持的话会降级为轮询机制，性能会差很多；
+
+> compiler.infrastructureLogger 和 Stats 是 Webpack 中两个完全独立的模块。
+>
+> - compiler.infrastructureLogger：构建过程的实时日志；
+> - Stats：构建结果的汇总报告；
 
 ## 7. 现在Compiler有了钩子，开始挂载配置中的插件
 
@@ -538,19 +569,108 @@ const createCompiler = () => {
 };
 ```
 
-## 8. Compiler 环境准备相关 hooks 执行
+依次执行配置文件中的 plugin ，将相关订阅挂载到目标 hook 上；
+这里 Plugin 同时支持 Function 和 Class 两种写法，所以在这里要做区别执行；
+
+## 8. 应用所有内置插件（基于配置）
 
 ```js
-const createCompiler = () => {
-  compiler.hooks.environment.call();
-  compiler.hooks.afterEnvironment.call();
-};
-```
+class WebpackOptionsApply {
+  process(options, compiler) {
+    // 1. 触发环境钩子（基础环境已就绪）
+    compiler.hooks.environment.call();
+    compiler.hooks.afterEnvironment.call();
 
-## 9. 应用所有内置插件（基于配置）
+    // 2. 根据 target 加载核心插件
+    if (options.target === "web") {
+      // 模拟：添加 web 环境下的 chunk 加载插件
+      const JsonpTemplatePlugin = require("./JsonpTemplatePlugin");
+      new JsonpTemplatePlugin().apply(compiler);
+    } else if (options.target === "node") {
+      const NodeTemplatePlugin = require("./NodeTemplatePlugin");
+      new NodeTemplatePlugin().apply(compiler);
+    }
 
-```js
+    // 3. 处理 entry 配置
+    const EntryOptionPlugin = require("./EntryOptionPlugin");
+    new EntryOptionPlugin().apply(compiler);
+    // 触发 entryOption 钩子，实际会创建 EntryPlugin
+    compiler.hooks.entryOption.call(options.context, options.entry);
+
+    // 4. 处理 resolve 配置（简化：直接赋值）
+    compiler.resolverFactory.hooks.resolveOptions
+      .for("normal")
+      .tap("WebpackOptionsApply", (resolveOptions) => {
+        return { ...resolveOptions, ...options.resolve };
+      });
+
+    // 处理 loader 解析器配置
+    compiler.resolverFactory.hooks.resolveOptions
+      .for("loader")
+      .tap("WebpackOptionsApply", (resolveOptions) => {
+        return { ...resolveOptions, ...options.resolveLoader };
+      });
+
+    // 5. 处理 module.rules（简化：模拟规则注册）
+    if (options.module && options.module.rules) {
+      const NormalModule = require("./NormalModule");
+      for (const rule of options.module.rules) {
+        // 实际会调用 NormalModule 的注册逻辑
+        compiler.hooks.compilation.tap("WebpackOptionsApply", (compilation) => {
+          compilation.hooks.buildModule.tap("RuleHandler", (module) => {
+            if (module.type === "javascript/auto") {
+              // 模拟应用 loader 规则
+              console.log(`Apply rule for test: ${rule.test}`);
+            }
+          });
+        });
+      }
+    }
+
+    // 6. 根据 devtool 添加 source map 插件
+    if (options.devtool) {
+      const SourceMapDevToolPlugin = require("./SourceMapDevToolPlugin");
+      new SourceMapDevToolPlugin(options.devtool).apply(compiler);
+    }
+
+    // 7. 根据 optimization 配置添加优化插件
+    if (options.optimization && options.optimization.splitChunks) {
+      const SplitChunksPlugin = require("./SplitChunksPlugin");
+      new SplitChunksPlugin(options.optimization.splitChunks).apply(compiler);
+    }
+
+    if (options.optimization && options.optimization.minimize) {
+      const TerserPlugin = require("./TerserPlugin");
+      new TerserPlugin().apply(compiler);
+    }
+
+    // 8. 处理 externals
+    if (options.externals) {
+      const ExternalsPlugin = require("./ExternalsPlugin");
+      new ExternalsPlugin(options.target, options.externals).apply(compiler);
+    }
+
+    // 9. 触发装配完成钩子
+    compiler.hooks.afterPlugins.call(compiler);
+    compiler.hooks.afterResolvers.call(compiler);
+  }
+}
+
 const createCompiler = () => {
   new WebpackOptionsApply().process(options, compiler);
 };
 ```
+
+用户的自定义 plugins 挂载完成以后，开始执行 WebpackOptionsApply 来挂载系统内置的 plugins ，
+
+- 首先这里需要依赖系统的读写能力，所以要在 NodeEnvironmentPlugin 后面，
+- 同时这里也触发若干钩子，所以用户的自定义 plugins 要在此之前就挂载好，以免被漏掉；
+
+此时所有 静态配置 都已经固定下来，首先会触发 `environment` 相关的钩子：
+
+- 这里分为 `hooks.environment` 和 `hooks.afterEnvironment` 2 个步骤，这种“分步钩子”的设计在 Webpack 中非常常见，是为插件提供可控的执行顺序边界。
+- `hooks.environment` 提供给 plugin 最后 1 次对 配置 进行增删改的机会；
+- `hooks.afterEnvironment` 在语义上认为环境已最终确定，可以安全地将配置翻译为插件了，只能进行查询；
+  - webpack 中所有配置项都对应了相关的 class 来负责实现，
+    - `entry` 对应 EntryPlugin，
+    - `output` 对应 JsonpTemplatePlugin，NodeTemplatePlugin 等等；
