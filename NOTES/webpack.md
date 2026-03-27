@@ -443,6 +443,13 @@ const webpack = () => {
 };
 ```
 
+> 在配置文件中，包含 2 类配置字段：
+>
+> 1. webpack 内部自行消费的配置字段，如 `entry`、`output`、`module`、`resolve`、`plugin` 等等，这些字段需要遵循 webpack 定义的规范来书写；
+> 2. 留给工具生态链消费的自定义配置字段，如 `devServer`、`babel`、`eslintConfig` 等等，webpack 会忽略它们；
+>
+> 这种设计为工具链的集成提供了极大的灵活性。
+
 ## 2. 验证配置
 
 ```js

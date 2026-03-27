@@ -1,4 +1,4 @@
-DevServer 对 Webpack 进行二次封装来实现本地服务和 HMR
+# DevServer 对 Webpack 进行二次封装来实现本地服务和 HMR
 
 ```js
 class WebpackCLI {
@@ -10,7 +10,7 @@ class WebpackCLI {
     const Server = require("webpack-dev-server");
     const server = new Server(compiler, serveOptions);
 
-    // 999. 启动服务
+    // 启动服务
     await server.start();
   }
 }
