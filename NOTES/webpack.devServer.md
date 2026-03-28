@@ -1,6 +1,10 @@
 # DevServer 对 Webpack 进行二次封装来实现本地服务和 HMR（未完成）
 
+webpack-dev-server 是一个独立的 CLI 工具，本质上是 1 个基于 Express 的 Node.js 服务器。
+
 ```js
+import webpackDevMiddleware from "webpack-dev-middleware";
+
 class WebpackCLI {
   async serve() {
     // 创建 compiler
