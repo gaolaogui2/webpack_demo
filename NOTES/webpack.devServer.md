@@ -1,4 +1,4 @@
-# DevServer 对 Webpack 进行二次封装来实现本地服务和 HMR
+# DevServer 对 Webpack 进行二次封装来实现本地服务和 HMR（未完成）
 
 ```js
 class WebpackCLI {
